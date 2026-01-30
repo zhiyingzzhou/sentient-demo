@@ -19,16 +19,6 @@
 
 .main {
   display: flex;
-  min-height: 100vh;
-  width: 100%;
-  max-width: 800px;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: space-between;
-  background: color-mix(in srgb, var(--foreground) 86%, transparent);
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  backdrop-filter: blur(12px);
-  padding: 120px 60px;
 }
 
 .intro {
