@@ -4,7 +4,9 @@ import React, { useEffect, useMemo, useRef } from 'react';
 
 const BASE_COLOR = '#131313';
 const PLANE_Z = -100; // 仅用于语义，现实现不依赖 three 相机
-const MOTION_WARP = 1.0;
+// 目标：更像“自然光在流动”，而不是图片在形变。
+// `MOTION_WARP` 主要影响“光影扰动强度”，`MOTION_DRIFT` 主要影响“光影漂移速度/幅度”。
+const MOTION_WARP = 1.35;
 const MOTION_DRIFT = 1.0;
 
 type GlState = {
@@ -166,39 +168,52 @@ const fragmentShader = `
   }
 
   void main() {
-    vec2 uv = vUv * uRepeat + uOffset;
-    vec2 baseUv = uv;
+    vec2 baseUv = vUv * uRepeat + uOffset;
+    vec2 uv = baseUv;
     vec2 center = uOffset + uRepeat * 0.5;
 
     float t = uTime;
 
     // 让运动主要发生在左侧橙色区域（右侧保持更稳定）
-    float mask = smoothstep(0.85, 0.05, baseUv.x);
+    float mask = 1.0 - smoothstep(0.05, 0.85, baseUv.x);
     mask = pow(mask, 1.35);
 
-    // 轻微“呼吸”缩放（让橙色团有生命感）
-    float zoom = 1.0 + 0.045 * sin(t * 0.35) * mask;
-    uv = (uv - center) / zoom + center;
-
-    // 很小的旋转，避免静止感（幅度保持极低）
-    float ang = 0.03 * sin(t * 0.22) * mask;
-    mat2 rot = mat2(cos(ang), -sin(ang), sin(ang), cos(ang));
-    uv = rot * (uv - center) + center;
-
-    // 低频流场扰动：让渐变“流动”但不出现明显形状边界
+    // 只做“非常轻微”的坐标扰动（避免看起来像整张图在变形）
     vec2 p = (uv - center) * 2.0;
     vec2 flow = vec2(
-      fbm(p * 1.25 + vec2(0.0, t * 0.05)),
-      fbm(p * 1.55 + vec2(t * 0.04, 0.0))
+      fbm(p * 1.15 + vec2(0.0, t * 0.08)),
+      fbm(p * 1.45 + vec2(t * 0.06, 0.0))
     ) - 0.5;
-    uv += flow * (0.045 * uWarp) * mask;
+    uv += flow * (0.022 * uWarp) * mask;
 
     // 极慢漂移（优先上下，横向很小，保证橙色仍在最左侧）
-    uv += vec2(0.006 * sin(t * 0.08), 0.012 * sin(t * 0.06)) * uDrift * mask;
+    uv += vec2(0.002 * sin(t * 0.22), 0.006 * sin(t * 0.18)) * uDrift * mask;
 
     uv = clamp(uv, vec2(0.0), vec2(1.0));
 
     vec3 col = texture2D(uMap, uv).rgb;
+
+    // “自然光在动”：在不改变图形轮廓的前提下，叠加一个大尺度、低频、缓慢移动的光场。
+    float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    float hot = smoothstep(0.08, 0.62, lum); // 主要影响橙色高亮区域
+
+    vec2 q = baseUv;
+    vec2 c1 = vec2(0.18 + 0.035 * sin(t * 0.18), 0.56 + 0.06 * sin(t * 0.12));
+    vec2 c2 = vec2(0.22 + 0.045 * sin(t * 0.15 + 1.8), 0.30 + 0.05 * sin(t * 0.10 + 2.6));
+    float d1 = length((q - c1) * vec2(1.45, 1.0));
+    float d2 = length((q - c2) * vec2(1.15, 1.35));
+    float g1 = exp(-d1 * d1 * 6.0);
+    float g2 = exp(-d2 * d2 * 5.0);
+    float lightBase = g1 * 0.95 + g2 * 0.7;
+
+    float lightNoise = fbm((q - vec2(0.12, 0.52)) * 2.6 + vec2(t * 0.07, -t * 0.05));
+    lightNoise = smoothstep(0.25, 0.88, lightNoise);
+    float light = lightBase * (0.72 + 0.28 * lightNoise);
+
+    float intensity = light * hot * mask;
+    vec3 warm = vec3(0.9686, 0.5765, 0.1020); // #f7931a
+    col += warm * intensity * (0.18 * uWarp);
+    col *= 1.0 + intensity * (0.08 * uWarp);
 
     // 轻量噪点（替代 postprocessing 的 Noise）
     float grain = (hash12(gl_FragCoord.xy + uTime * 60.0) - 0.5) * 0.03;
